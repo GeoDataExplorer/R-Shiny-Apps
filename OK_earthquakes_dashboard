@@ -1,0 +1,441 @@
+#install.packages(c("shinydashboard","shiny", "dplyr", "tidygeocoder", "geosphere", "sp", "sf", "broom", "raster", "rgdal", "ggplot2", "rgeos", "ggsn", "zoo", "rsconnect","remotes","leaflet","plotly","lubridate","rgl","poweRlaw"))
+
+library(shinydashboard)
+library(shiny)
+library(dplyr)
+library(tidygeocoder)
+library(geosphere)
+library(sp)
+remotes::install_github(repo = "r-spatial/sf")
+library(broom)
+library(raster)
+#library(rgdal)
+library(ggplot2)
+#library(rgeos)
+#library(ggsn)
+library(zoo)
+library(rsconnect)
+library(DT)
+library(leaflet)
+library(plotly)
+library(lubridate)
+library(rgl)
+library(poweRlaw)
+library(viridis)
+
+ui <- dashboardPage(
+  
+  dashboardHeader(title = "OK Seismicity"),
+  
+  
+  
+  dashboardSidebar(
+    
+    sidebarMenu(
+      
+      menuItem("Map", tabName = "map", icon = icon("map")),
+      
+      menuItem("Magnitude of Completeness", tabName = "mag_completeness", icon = icon("chart-line")),
+      
+      menuItem("Magnitude Time Series", tabName = "mag_time_series", icon = icon("chart-line")),
+      
+      menuItem("Depth Time Series", tabName = "depth_time_series", icon = icon("chart-line")),
+      
+      menuItem("Cumulative Count Series", tabName = "cum_count_series", icon = icon("chart-line")),
+      
+      menuItem("Data Explorer", tabName = "data_explorer", icon = icon("table")),
+      
+      menuItem("10 Most Recent Events", tabName = "recent_events", icon = icon("table")),
+      
+      menuItem("References", tabName = "references", icon = icon("book")),
+      
+      menuItem("Terms of Use", tabName = "terms_of_use", icon = icon("info-circle"))
+      
+    )
+    
+  ),
+  
+  
+  
+  dashboardBody(
+    
+    tabItems(
+      
+      tabItem(tabName = "map",
+              
+              textInput("Address", "Enter Address", value = "Oklahoma City, OK"),
+              
+              numericInput(inputId = "FromDate", label = "From Date", value = format(Sys.time() - 30*24*60*60, "%Y%m%d2359")),
+              
+              numericInput(inputId = "ToDate", label = "To Date", value = format(Sys.time(), "%Y%m%d2359")),
+              
+              h6("Note: Enter Dates as YYYYMMDDhhmm"),
+              
+              sliderInput(inputId = "Radius", label = "Search Radius (km)", min = 0, max = 320, value = 320, step = 5),
+              
+              actionButton("submit", "Submit"),
+              
+              h6("Earthquake data source: https://ogsweb.ou.edu/eq_catalog/"),
+              
+              leafletOutput("map", width = "100%", height = "600px")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "mag_completeness",
+              
+              sliderInput(inputId = "Magnitude", label = "Magnitude", min = 0, max = 6, value = 0.5, step = 0.1),
+              
+              plotOutput("power"),
+              
+              verbatimTextOutput("magofcomp")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "mag_time_series",
+              
+              sliderInput(inputId = "Magnitude", label = "Magnitude", min = 0, max = 6, value = 0.5, step = 0.1),
+              
+              plotOutput("magnitude")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "depth_time_series",
+              
+              sliderInput(inputId = "Depth_km", label = "Depth Km", min = 0, max = 50, value = 20),
+              
+              sliderInput(inputId = "Basement_Elev", label = "Basement Elevation (ft) from OGS OF1-2018", min = -40000, max = 1585, value = -12000, step = 1000),
+              
+              h6("Elevation of the Top of the Basement: http://ou.edu/content/dam/ogs/documents/OFRs/OF1-2018.pdf"),
+              
+              plotOutput("depth")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "cum_count_series",
+              
+              plotOutput("cumcount")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "data_explorer",
+              
+              downloadButton('downloadData', 'Download'),
+              
+              dataTableOutput("filtered_by_location")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "recent_events",
+              
+              dataTableOutput("recent")
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "references",
+              
+              HTML('<h1><span style="text-decoration: underline;">References</span></h1>
+
+                    <p>Earthquake data source:&nbsp;<a href=https://ogsweb.ou.edu/eq_catalog/>https://ogsweb.ou.edu/eq_catalog/</a></p>
+
+                    <p>Elevation of the Top of the Basement:&nbsp;<a href=http://ou.edu/content/dam/ogs/documents/OFRs/OF1-2018.pdf target="_blank" rel="noopener">http://ou.edu/content/dam/ogs/documents/OFRs/OF1-2018.pdf</a></p>')
+              
+      ),
+      
+      
+      
+      tabItem(tabName = "terms_of_use",
+              
+              HTML('<h1><span style="text-decoration: underline;">Terms of Use</span></h1>
+
+                    <p>1. The results of this tool can be used for education and other purposes as long as the sources are properly cited.</p>
+
+                    <p>2. The creator of the tool does not take responsibility for the accuracy of the outputs of these tools or any consequences resulted by using the results.</p>
+
+                    <p>If you have any questions regarding these terms or the tool itself, please contact Drew Kreman at&nbsp;<a class="pv-contact-info__contact-link link-without-visited-state t-14" href=https://www.linkedin.com/in/drew-kreman>linkedin.com/in/drew-kreman</a></p>')
+              
+      )
+      
+    )
+    
+  )
+  
+)
+
+
+
+# Define server logic
+
+server <-function(input, output){
+  
+  
+  
+  # Geocode the address when the submit button is clicked
+  coordinates <- eventReactive(input$submit, {
+    req(input$Address)
+    
+    # Geocode the address using tidygeocoder
+    address_df <- tibble(addr = input$Address)
+    geocoded_data <- address_df %>%
+      geocode(addr, method = 'osm')
+    
+    return(geocoded_data)
+  })
+  
+  # Filtered dataset based on the geocoded location
+  filtered_df <-eventReactive(input$submit,{
+  
+    req(input$Magnitude, input$FromDate, input$ToDate, input$Radius)
+    # New data from address coordinates
+    
+    # Ensure we have coordinates
+    coord <- coordinates()
+    if (is.na(coord$lat) || is.na(coord$long)) {
+      return(NULL)
+    }
+    
+    FromDate <-input$FromDate
+    
+    ToDate <- input$ToDate
+    
+    Mag <- input$Magnitude
+    
+    
+    
+    url <- paste0("https://ogsweb.ou.edu/api/earthquake?start=",FromDate,"&end=",ToDate,"&mag=",Mag,"&format=csv")
+    
+    
+    
+    ogs <- read.csv(url)
+    
+    
+    
+    ogs$timestamp <-as.integer(as.Date(ogs$origintime))
+    
+    ogs$origintime <-as.Date(ogs$origintime)
+    
+    ogs$county <- toupper(ogs$county)
+    
+    ogs <- ogs %>%
+      rowwise() %>%
+      mutate(
+        dist_km = geosphere::distHaversine(c(longitude, latitude), 
+                                           c(coord$long, coord$lat)) / 1000
+      ) %>%
+      filter(dist_km <= input$Radius)
+    
+    return(ogs)
+  })
+    
+  
+  
+  
+  # Call the color function (colorNumeric) to create a new palette function
+  
+  #pal <- colorNumeric(palette = "coolwarm", domain = NULL)
+  
+  
+  
+  # Leaflet plot
+  
+  
+  
+  # Plot the filtered data on a map
+  output$map <- renderLeaflet({
+    # Ensure filtered data is available
+    req(filtered_df())
+    
+    pal <- colorNumeric(palette = "coolwarm", domain = NULL)
+    
+    data <- filtered_df()
+    
+    # Generate the map using leaflet
+    leaflet(data)%>%
+      addTiles() %>%
+      setView(lng = -97.5, lat = 35.5, zoom = 7)%>%
+      addCircleMarkers(
+        lng = ~longitude,
+        lat = ~latitude,
+        radius = ~magnitude *2,
+        color = ~pal(origintime),
+        popup = ~paste("DateTime: ", origintime, "<br>",
+                       "Magnitude: ", magnitude, "<br>",
+                       "Depth: ", depth_km, " km")
+      )
+  })
+  
+  
+  
+  # Plot Date and Magnitude
+  
+  
+  
+  output$magnitude <- renderPlot({
+    
+    
+    
+    
+    
+    ggplot()+labs(title = "Magnitude vs. Time") +geom_point(data = filtered_df(), aes(x = origintime, y = magnitude, color = depth_km),size = 3)+geom_smooth(data = filtered_df(),aes(x = origintime, y = magnitude),method="auto", se=TRUE, fullrange=FALSE, level=0.95)},width = 800,height=400)
+  
+  
+  
+  # Plot Date and Cumulative Count
+  
+  
+  
+  output$cumcount <- renderPlot({
+    
+    
+    
+    
+    
+    ggplot(filtered_df(), aes(x=origintime))+labs(title = "Cumulative Count vs. Time", y = "Cumulative Number of Events")+ stat_bin(aes(y=cumsum(..count..)),geom = "step",size = 1, bins = nrow(filtered_df()))},width = 800,height=400)
+  
+  
+  
+  # Plot Depth and Longitude
+  
+  
+  
+  output$depth <- renderPlot({
+    
+    ggplot()+
+      
+      labs(title = "Depth vs. Time") +
+      
+      geom_hline(yintercept = -input$Basement_Elev/3280, linetype = 'dashed', color = 'orange', size = 1.5)+
+      
+      #geom_text(aes(x=input$ToDate,label = "Basement_Elev", y=(-input$Basement_Elev/3280)+0.5),color = 'orange', angle = 0)+
+      
+      geom_point(data = filtered_df(),aes(x = origintime, y = depth_km, color = magnitude),size=3)+
+      
+      #geom_smooth(data = filtered_df(),aes(x = origintime, y = depth_km),method="auto", se=TRUE, fullrange=FALSE, level=0.95)+
+      
+      scale_y_reverse()
+    
+  },width = 800,height=400)
+  
+  # Plot datatable
+  
+  output$filtered_by_location <-renderDataTable({
+    
+    filtered_df()
+    
+  })
+  
+  
+  
+  # Power Law Plot
+  
+  output$power <- renderPlot({
+    
+    m_pl = conpl$new(filtered_df()$magnitude)
+    
+    est = estimate_xmin(m_pl)
+    
+    m_pl$setXmin(est)
+    
+    plot(m_pl,panel.first = grid(col ="grey80"),
+         
+         xlab = "Magnitude", ylab = "CDF")
+    
+    lines(m_pl, col = 2, lwd = 2)
+    
+  })
+  
+  
+  
+  # Magnitude of Completeness
+  
+  output$magofcomp<-renderPrint({
+    
+    m_pl = conpl$new(filtered_df()$magnitude)
+    
+    est = estimate_xmin(m_pl)
+    
+    est$xmin
+    
+  })
+  
+  
+  
+  # Count
+  
+  output$count<-renderPrint({
+    
+    print("Event Count")
+    
+    count(filtered_df())
+    
+  })
+  
+  
+  
+  # Download data
+  
+  output$downloadData <- downloadHandler(
+    
+    filename = function() {
+      
+      paste('data-', Sys.Date(), '.csv', sep='')
+      
+    },
+    
+    content = function(file) {
+      
+      write.csv(filtered_df(), file)
+      
+    }
+    
+  )
+  
+  
+  
+  output$recent <- renderDataTable({
+    
+    
+    
+    FromDate <-input$FromDate
+    
+    ToDate <- input$ToDate
+    
+    Mag <- input$Magnitude
+    
+    
+    
+    url <- paste0("https://ogsweb.ou.edu/api/earthquake?start=",FromDate,"&end=",ToDate,"&mag=",Mag,"&format=csv")
+    
+    
+    
+    ogs <- read.csv(url)
+    
+    ogs$timestamp <-as.integer(as.Date(ogs$origintime))
+    
+    ogs <-ogs[order(-ogs$timestamp),]
+    
+    head(ogs,10)
+    
+  })
+  
+  
+}
+
+
+
+# Run the application
+
+shinyApp(ui = ui, server = server)
