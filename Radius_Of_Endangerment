@@ -1,0 +1,177 @@
+library(shiny)
+library(ggplot2)
+library(scales)
+library(dplyr)
+library(bigsnpr)
+
+
+ui<-fluidPage(
+  
+  sidebarLayout(
+    
+    sidebarPanel(
+      
+      
+      
+      tags$h3("Input Variables to Determine Delta P"),
+      
+      numericInput("Q","Injection Rate (b/d)",min = 0, max = 15000, value = 10000),
+      
+      numericInput("h","Pay Thickness (ft)",min = 0, max = 1500, value = 80),
+      
+      sliderInput("k", "Permeability (mD)", min=0, max=1000, value=c(50,100)),
+      
+      sliderInput("p", "Porosity (%)", min=0, max=50, value=c(12,15)),
+      
+      tags$h3("Input Variables to determine Radius of Endangerment"),
+      
+      numericInput("BTW", "Base Treatable Water (ft)",value = 1070),
+      
+      numericInput("Perf_Mid","Mid Perf (ft)", value = 6644),
+      
+      numericInput("FL","Initial Fluid Level From Surface (ft)", value = 5700),
+
+      br(),
+      tags$h6("Radius -> Problem well radius (ft) from injection well"),
+      tags$h6("DeltaP -> Change in pressure (psi) at problem well"),
+      tags$h6("HydStCol -> Water column equivalent (ft) at problem well"),
+      tags$h6("FldCol_AfterInj -> Fluid column height (ft) at problem well after injection"),
+      tags$h6("Endang_Thick -> Thickness (ft) between base of treatable water and fluid column height after injection"),
+      
+    ),
+    
+    mainPanel(
+      
+      tags$h2("Radius of Endangering Calculation"),
+      
+      plotOutput("fourpanel"),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      br(),
+      
+      tags$h4("STAT Table"),
+      
+      verbatimTextOutput("stats2")
+    
+      
+    )
+    
+  )
+  
+)
+
+server <- function(input, output) {
+ 
+  k <- reactive({runif(10000, input$k[1], input$k[2])})
+  
+  p <- reactive({runif(10000, input$p[1], input$p[2])})
+  
+  r <- reactive({runif(10000, 0.1, 10000)})
+  
+  P <- reactive({(162.6*input$Q*1)/(k()*input$h)*log10((k()*3650)/(70.4*p()*1*0.0000075*r()^2))})
+  
+  #Initial Condictions
+  
+  FlMax <- reactive(input$BTW + 150) # Maximum Allowable Fluid level (ft)*
+  
+  Fl1 <- reactive(input$Perf_Mid-input$FL) # fluid column in well prior to injection *
+
+  #Final Max Conditions
+  
+  MaxAllowFlCo <- reactive(input$Perf_Mid - FlMax())#*
+  
+  H <- reactive(P()/0.494)
+  
+  HydStCol <- reactive(DeltaP()/0.494) # Hydrostatic Column (ft)
+  
+  Ht <- reactive(Fl1()+H())
+  
+  FldColAfterInj <- reactive(Fl1()+HydStCol())# Fluid column after injection (ft)
+
+  df <- reactive({
+   
+    Radius <- seq_log(1,10000,10)
+  
+    DeltaP <- (162.6*input$Q*1)/(mean(k())*input$h)*log10((mean(k())*3650)/(70.4*mean(p())*1*0.0000075*Radius^2))
+ 
+    HydStCol <- DeltaP/0.494
+  
+    Fl1 <- input$Perf_Mid-input$FL
+    
+    FldCol_AfterInj <- Fl1+HydStCol
+    
+    FlMax <- input$BTW + 150
+    
+    FldCol_MaxAllow <-input$Perf_Mid - FlMax
+    
+    Endang_Thick <- FldCol_MaxAllow - FldCol_AfterInj
+    
+    data.frame(
+      
+      Radius,DeltaP,HydStCol,FldCol_AfterInj,Endang_Thick
+      
+    )
+    
+  })
+  
+  output$stats2 <- renderPrint({
+    
+    p1<- ((input$Perf_Mid*0)+(MaxAllowFlCo())) + 10
+    
+    p99 <- ((input$Perf_Mid*0)+(MaxAllowFlCo())) - 10
+    
+    df.1<-subset(df(),  between(df()$Ht,p99,p1))#>= 2000)
+    df()
+  })
+  
+  output$fourpanel <- renderPlot({
+    ggplot()+
+      labs(title = "Radius of Endangerment is the radius (ft) at which the hydrostatic column (grey line) is below the BTW (blue line)") +
+    
+      geom_point(aes(x = r(), y = H()),size = 3)+ # Water column equivalent
+    
+      geom_smooth(aes(x = r(), y = H()),method="auto", se=TRUE, fullrange=FALSE, level=0.95, color = "black")+
+    
+      geom_point(aes(x = r(), y = Ht()),size = 3, color = "grey50")+ #fluid column height
+    
+      geom_smooth(aes(x = r(), y = Ht()),method="auto", se=TRUE, fullrange=FALSE, level=0.95, color = "grey")+
+    
+      scale_x_continuous(trans='log10')+
+    
+      annotation_logticks(sides = "b")  +
+    
+      xlab("Radius (ft)")+
+    
+      ylab("Hydrostatic Column (ft)")+
+    
+      geom_hline(yintercept = ((input$Perf_Mid*0)+(input$Perf_Mid-(input$BTW+150))), linetype = 'solid', color = 'blue', size = 1)+
+    
+      geom_text(aes(x=7000, label="Treatable Water", y=(((input$Perf_Mid*0)+
+                                                           input$Perf_Mid)-input$BTW)+100), color="blue", angle=0)+
+      geom_hline(yintercept = ((input$Perf_Mid*0)+input$Perf_Mid), linetype = 'solid', color = 'dark green', size = 1)+
+    
+      geom_text(aes(x=7000, label="Ground Level", y=((input$Perf_Mid*0)+input$Perf_Mid+150)))+
+    
+      geom_text(aes(x=2, label="Top of Injection Interval", y=((input$Perf_Mid*0))))+
+    
+      theme_minimal()
+    
+  },height = 600, width = 700)
+}
+
+shinyApp(ui = ui, server = server)
